@@ -1,4 +1,4 @@
-import disnake, os, asyncio, yt_dlp
+import disnake, os, asyncio, yt_dlp, random
 from disnake.ext import commands
 import urllib.parse, urllib.request, re
 
@@ -19,7 +19,11 @@ ffmpeg_options = {'before_options': '-reconnect 1 -reconnect_streamed 1 -reconne
 
 @client.event
 async def on_ready():
+    calc = lara.latency * 1000
+    pong = round(calc)
     print(f'{client.user} Está on para usar!')
+    print(f'Atualmente ele está com {pong}ms')
+    
 
 async def play_next(ctx):
     if queues[ctx.guild.id] != []:
@@ -147,6 +151,12 @@ async def skip(ctx):
             await ctx.send("Nenhuma música está sendo reproduzida no momento..")
     except Exception as e:
         print(e)
-        await ctx.send("Ocorreu um erro ao tentar pular a música.") 
+        await ctx.send("Ocorreu um erro ao tentar pular a música.")
+
+@client.command(name='name', aliases=['latency', 'pong', 'net']
+async def ping(ctx):
+    calc = lara.latency * 1000
+    pong = round(calc)
+    await ctx.reply(f'🏓 Estou com: {pong}`ms`')
 
 client.run("TOKEN")
