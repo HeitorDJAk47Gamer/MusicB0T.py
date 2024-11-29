@@ -7,6 +7,7 @@ intents = disnake.Intents.default()
 intents.message_content = True
 client = commands.Bot(command_prefix=".", intents=intents)
 
+current_song = {}
 queues = {}
 voice_clients = {}
 youtube_base_url = 'https://www.youtube.com/'
@@ -19,11 +20,7 @@ ffmpeg_options = {'before_options': '-reconnect 1 -reconnect_streamed 1 -reconne
 
 @client.event
 async def on_ready():
-    calc = lara.latency * 1000
-    pong = round(calc)
     print(f'{client.user} Está on para usar!')
-    print(f'Atualmente ele está com {pong}ms')
-    
 
 async def play_next(ctx):
     if queues[ctx.guild.id] != []:
@@ -50,7 +47,7 @@ async def play(ctx, *, link):
             if ctx.guild.id not in queues:
                 queues[ctx.guild.id] = []  # Cria a fila, se não existir
             queues[ctx.guild.id].append(link)
-            await ctx.send(f"adicionado na fila: **{link}**")
+            await ctx.send(f"Added to queue: **{link}**")
             return
 
         # Se não está tocando, inicia a reprodução
@@ -64,11 +61,11 @@ async def play(ctx, *, link):
             player,
             after=lambda e: asyncio.run_coroutine_threadsafe(play_next(ctx), client.loop)
         )
-        await ctx.send(f"Tocando agora: **{title}**")
+        await ctx.send(f"Now playing: **{title}**")
 
     except Exception as e:
         print(e)
-        await ctx.send("Ocorreu um erro ao tentar reproduzir a música.")
+        await ctx.send("An error occurred while trying to play the song.")
 
 @client.command(name="clearq")
 async def clear_queue(ctx):
@@ -101,38 +98,71 @@ async def stop(ctx):
     except Exception as e:
         print(e)
 
-@client.command(name="queue")
-async def view_queue(ctx):
-    if ctx.guild.id in queues and queues[ctx.guild.id]:
+queues = {}  # Dicionário que contém as filas de músicas por servidor
+
+class QueueView(disnake.ui.View):
+    def __init__(self, ctx, queue, per_page=10):
+        super().__init__(timeout=None)
+        self.ctx = ctx
+        self.queue = queue
+        self.per_page = per_page
+        self.current_page = 0
+        self.total_pages = (len(queue) - 1) // per_page + 1
+
+        # Atualizar os botões com base na página
+        self.update_buttons()
+
+    def update_buttons(self):
+        self.children[0].disabled = self.current_page == 0  # Botão Anterior
+        self.children[1].disabled = self.current_page == self.total_pages - 1  # Botão Próximo
+
+    async def send_embed(self, inter=None):
+        start = self.current_page * self.per_page
+        end = start + self.per_page
+        page_queue = self.queue[start:end]
+
         embed = disnake.Embed(
-            title="🎶 Fila atual",
-            description="Músicas na fila:",
-            color=disnake.Color.blue()
+            title="Fila de Músicas",
+            description="\n".join([f"**{idx + start + 1}.** [{url}]({url})" for idx, url in enumerate(page_queue)]),
+            color=disnake.Color.blurple()
         )
-        for idx, url in enumerate(queues[ctx.guild.id], start=1):
-            try:
-                data = ytdl.extract_info(url, download=False)
-                title = data.get('title', 'Título desconhecido')
-                embed.add_field(
-                    name=f"{idx}. {title}",
-                    value=f"[Link]({url})",
-                    inline=False
-                )
-            except Exception as e:
-                print(f"Erro ao obter título: {e}")
-                embed.add_field(
-                    name=f"{idx}. Erro ao buscar título",
-                    value=f"[Link]({url})",
-                    inline=False
-                )
-        await ctx.send(embed=embed)
-    else:
-        await ctx.send("A fila está vazia.")
+        embed.set_footer(text=f"Página {self.current_page + 1}/{self.total_pages}")
+
+        if inter:
+            await inter.response.edit_message(embed=embed, view=self)
+        else:
+            await self.ctx.send(embed=embed, view=self)
+
+    @disnake.ui.button(label="Anterior", style=disnake.ButtonStyle.primary)
+    async def previous_page(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
+        self.current_page -= 1
+        self.update_buttons()
+        await self.send_embed(inter)
+
+    @disnake.ui.button(label="Próximo", style=disnake.ButtonStyle.primary)
+    async def next_page(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
+        self.current_page += 1
+        self.update_buttons()
+        await self.send_embed(inter)
+
+
+@client.slash_command(name="queue", description="Exibe a fila de músicas atual")
+async def view_queue(inter: disnake.ApplicationCommandInteraction):
+    guild_id = inter.guild.id
+
+    if guild_id not in queues or not queues[guild_id]:
+        await inter.response.send_message("A fila está vazia.", ephemeral=True)
+        return
+
+    queue = queues[guild_id]
+    view = QueueView(inter, queue)
+    await view.send_embed()
 
 @client.command(name="skip")
 async def skip(ctx):
     try:
         if ctx.guild.id in voice_clients and voice_clients[ctx.guild.id].is_playing():
+            # Recupera o título da próxima música, se existir
             next_song = None
             if queues[ctx.guild.id]:
                 next_song_link = queues[ctx.guild.id][0]
@@ -144,19 +174,34 @@ async def skip(ctx):
             voice_clients[ctx.guild.id].stop()
 
             if next_song:
-                await ctx.send(f"Pulando para a próxima música: **{next_song}**")
+                await ctx.send(f"Skipping to the next song: **{next_song}**")
             else:
                 await ctx.send("Skipping... No more songs in the queue.")
         else:
-            await ctx.send("Nenhuma música está sendo reproduzida no momento..")
+            await ctx.send("No music is currently playing.")
     except Exception as e:
         print(e)
-        await ctx.send("Ocorreu um erro ao tentar pular a música.")
+        await ctx.send("An error occurred while trying to skip the song.")
 
-@client.command(name='name', aliases=['latency', 'pong', 'net']
+@client.command()
 async def ping(ctx):
-    calc = lara.latency * 1000
+    calc = client.latency * 1000
     pong = round(calc)
-    await ctx.reply(f'🏓 Estou com: {pong}`ms`')
+
+    x = disnake.Embed(title='**Pong**', description=f'{pong} `ms`', color=0xff0000)
+
+    y = disnake.Embed(title='**Pong**', description=f'{pong} `ms`', color=0xffff00)
+
+    z = disnake.Embed(title='**Pong**', description=f'{pong} `ms`', color=0x008000)
+
+    if pong > 160:
+        msg = await ctx.send(embed=x)
+        await msg.add_reaction('🏓')
+    elif 80 <= pong <= 160:
+        msg = await ctx.send(embed=y)
+        await msg.add_reaction('🏓')
+    elif pong < 80:
+        msg = await ctx.send(embed=z)
+        await msg.add_reaction('🏓')
 
 client.run("TOKEN")
